@@ -120,14 +120,27 @@ async def test_http_api_persists_taint_and_blocks_execution(tmp_path):
             headers={"Authorization": "Bearer operator-secret"},
             json={"action": action, "action_digest": proposal["action_digest"]},
         )
-        approval = await approval_response.json()
-        execution_response = await client.post(
-            "/v1/execute",
-            headers=headers,
-            json={"action": action, "approval_token": approval["approval_token"]},
-        )
-        assert execution_response.status == 403
+        assert approval_response.status == 400
+        assert "Tainted proposals cannot be approved" in await approval_response.text()
         assert email.sent == []
+
+
+@pytest.mark.asyncio
+async def test_http_api_requires_explicit_provenance_attestation(tmp_path):
+    gateway = SecurityGateway(
+        SecurityStore(tmp_path / "provenance.sqlite3"),
+        openai=FakeOpenAI(),
+        email=FakeEmail(),
+    )
+    app = create_app(gateway, gateway_token="gateway-secret", approval_token="operator-secret")
+    async with TestClient(TestServer(app)) as client:
+        response = await client.post(
+            "/v1/propose",
+            headers={"Authorization": "Bearer gateway-secret"},
+            json={"prompt": "send this", "untrusted_sources": []},
+        )
+        assert response.status == 400
+        assert "provenance_complete" in await response.text()
 
 
 def test_http_server_refuses_missing_or_shared_authentication_secrets():
