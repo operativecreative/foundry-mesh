@@ -45,7 +45,7 @@ def create_app(
         db_path = os.environ.get("MESH_SECURITY_DB", "data/security-gateway.sqlite3")
         gateway = SecurityGateway(SecurityStore(db_path))
 
-    app = web.Application(client_max_size=64 * 1024)
+    app = web.Application(client_max_size=512 * 1024)
     app["security_gateway"] = gateway
     app["gateway_token"] = gateway_token
     app["approval_token"] = approval_token
@@ -72,7 +72,10 @@ def create_app(
                     raise SecurityError("Each untrusted source needs source and content")
                 if not isinstance(item["source"], str) or not isinstance(item["content"], str):
                     raise SecurityError("Untrusted source fields must be strings")
-                if not item["source"] or not item["content"] or len(item["content"]) > 20000:
+                if (
+                    not item["source"] or len(item["source"]) > 200
+                    or not item["content"] or len(item["content"]) > 20000
+                ):
                     raise SecurityError("Untrusted source is empty or too large")
                 normalized.append((item["source"], item["content"]))
             result = await gateway.propose(prompt, normalized)
