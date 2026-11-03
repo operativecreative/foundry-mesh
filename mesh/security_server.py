@@ -46,16 +46,12 @@ def create_app(
         gateway = SecurityGateway(SecurityStore(db_path))
 
     app = web.Application(client_max_size=512 * 1024)
-    app["security_gateway"] = gateway
-    app["gateway_token"] = gateway_token
-    app["approval_token"] = approval_token
-
-    async def authorize(request: web.Request, key: str) -> None:
-        if not _bearer_matches(request, app[key]):
+    async def authorize(request: web.Request, expected: str) -> None:
+        if not _bearer_matches(request, expected):
             raise web.HTTPUnauthorized(text="Unauthorized")
 
     async def propose(request: web.Request) -> web.Response:
-        await authorize(request, "gateway_token")
+        await authorize(request, gateway_token)
         try:
             data = await request.json()
             if not isinstance(data, dict) or set(data) - {"prompt", "untrusted_sources"}:
@@ -86,7 +82,7 @@ def create_app(
             raise web.HTTPBadRequest(text=str(exc))
 
     async def approve(request: web.Request) -> web.Response:
-        await authorize(request, "approval_token")
+        await authorize(request, approval_token)
         try:
             data = await request.json()
             if not isinstance(data, dict) or set(data) != {"action", "action_digest"}:
