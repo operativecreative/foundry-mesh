@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import hmac
 import json
 import os
 import secrets
@@ -16,6 +15,7 @@ import sqlite3
 import ssl
 import time
 from dataclasses import dataclass
+from contextlib import contextmanager
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional
@@ -82,15 +82,19 @@ class SecurityStore:
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self):
         db = sqlite3.connect(self.db_path, timeout=15, isolation_level=None)
-        db.execute("PRAGMA journal_mode=WAL")
         db.execute("PRAGMA foreign_keys=ON")
         db.execute("PRAGMA busy_timeout=15000")
-        return db
+        try:
+            yield db
+        finally:
+            db.close()
 
     def _initialize(self) -> None:
         with self._connect() as db:
+            db.execute("PRAGMA journal_mode=WAL")
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS taint_records (
                     taint_id TEXT PRIMARY KEY,
@@ -227,6 +231,8 @@ def parse_tool_action(raw: Mapping[str, Any]) -> ProposedAction:
     """Strictly parse one model tool call; reject unknown names/fields/types."""
     if set(raw) != {"id", "type", "function"} or raw.get("type") != "function":
         raise SecurityError("Malformed tool call envelope")
+    if not isinstance(raw["id"], str) or not raw["id"] or len(raw["id"]) > 128:
+        raise SecurityError("Invalid tool call identifier")
     function = raw["function"]
     if not isinstance(function, Mapping) or set(function) != {"name", "arguments"}:
         raise SecurityError("Malformed function call")
@@ -282,6 +288,8 @@ class SandboxSMTP:
         recipients = self.env.get("MESH_EMAIL_ALLOWED_RECIPIENTS", "")
         if not all((host, username, password, sender, recipients)):
             raise SecurityError("Sandbox SMTP configuration is incomplete")
+        if "\\r" in sender or "\\n" in sender:
+            raise SecurityError("Sender header injection rejected")
         try:
             port = int(port_text)
         except ValueError as exc:
