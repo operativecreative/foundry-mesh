@@ -109,7 +109,7 @@ def create_app(
             raise web.HTTPBadRequest(text=str(exc))
 
     async def execute(request: web.Request) -> web.Response:
-        await authorize(request, "gateway_token")
+        await authorize(request, gateway_token)
         try:
             data = await request.json()
             if not isinstance(data, dict) or set(data) != {"action", "approval_token"}:
