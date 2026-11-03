@@ -102,6 +102,11 @@ class SecurityStore:
                     content_sha256 TEXT NOT NULL,
                     created_at REAL NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS proposals (
+                    action_sha256 TEXT PRIMARY KEY,
+                    action_json TEXT NOT NULL,
+                    created_at REAL NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS approvals (
                     token_sha256 TEXT PRIMARY KEY,
                     action_sha256 TEXT NOT NULL,
@@ -165,6 +170,23 @@ class SecurityStore:
                 (action.digest,),
             ).fetchone()
         return row is not None
+
+    def register_proposal(self, action: ProposedAction) -> None:
+        """Persist the exact model-proposed action before it can be approved."""
+        with self._connect() as db:
+            db.execute(
+                "INSERT OR IGNORE INTO proposals(action_sha256, action_json, created_at) "
+                "VALUES (?, ?, ?)",
+                (action.digest, action.canonical(), time.time()),
+            )
+
+    def is_registered_proposal(self, action: ProposedAction) -> bool:
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT action_json FROM proposals WHERE action_sha256=?",
+                (action.digest,),
+            ).fetchone()
+        return row is not None and row[0] == action.canonical()
 
     def create_approval(self, action: ProposedAction, ttl_seconds: int = 120) -> str:
         if not 1 <= ttl_seconds <= 900:
@@ -280,14 +302,21 @@ class SandboxSMTP:
     def _config(self) -> tuple[str, int, str, str, str, str, bool]:
         if self.env.get("MESH_EMAIL_SANDBOX") != "1":
             raise SecurityError("Email sandbox is not explicitly enabled")
-        host = self.env.get("MESH_SMTP_HOST", "")
+        host = self.env.get("MESH_SMTP_HOST", "").strip().lower().rstrip(".")
+        sandbox_hosts = {
+            item.strip().lower().rstrip(".")
+            for item in self.env.get("MESH_EMAIL_SANDBOX_HOSTS", "").split(",")
+            if item.strip()
+        }
         port_text = self.env.get("MESH_SMTP_PORT", "587")
         username = self.env.get("MESH_SMTP_USERNAME", "")
         password = self.env.get("MESH_SMTP_PASSWORD", "")
         sender = self.env.get("MESH_EMAIL_FROM", "")
         recipients = self.env.get("MESH_EMAIL_ALLOWED_RECIPIENTS", "")
-        if not all((host, username, password, sender, recipients)):
+        if not all((host, username, password, sender, recipients, sandbox_hosts)):
             raise SecurityError("Sandbox SMTP configuration is incomplete")
+        if host not in sandbox_hosts:
+            raise SecurityError("SMTP host is not in the exact sandbox host allowlist")
         if "\r" in sender or "\n" in sender:
             raise SecurityError("Sender header injection rejected")
         try:
@@ -383,11 +412,19 @@ class SecurityGateway:
         self.email = email or SandboxSMTP()
 
     async def propose(
-        self, prompt: str, untrusted_sources: Optional[Iterable[tuple[str, str]]] = None
+        self,
+        prompt: str,
+        untrusted_sources: Iterable[tuple[str, str]],
+        *,
+        provenance_complete: bool = False,
     ) -> dict[str, Any]:
+        if provenance_complete is not True:
+            raise SecurityError(
+                "Complete input provenance must be explicitly attested before proposing actions"
+            )
         taint_ids = [
             self.store.record_untrusted(source, content)
-            for source, content in (untrusted_sources or [])
+            for source, content in untrusted_sources
         ]
         response = await self.openai.propose(prompt)
         raw = response["tool_call"]
@@ -395,6 +432,7 @@ class SecurityGateway:
             return {"status": "no_tool_call", "content": response["content"]}
         action = parse_tool_action(raw)
         self.store.bind_action_taint(action, taint_ids)
+        self.store.register_proposal(action)
         self.store.audit("action_proposed", action.digest, "model proposed allowlisted action")
         return {
             "status": "approval_required",
