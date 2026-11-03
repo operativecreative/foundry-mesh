@@ -54,10 +54,19 @@ def create_app(
         await authorize(request, gateway_token)
         try:
             data = await request.json()
-            if not isinstance(data, dict) or set(data) - {"prompt", "untrusted_sources"}:
-                raise SecurityError("Unexpected proposal request fields")
+            if (
+                not isinstance(data, dict)
+                or set(data) != {"prompt", "untrusted_sources", "provenance_complete"}
+            ):
+                raise SecurityError(
+                    "Proposal requires prompt, untrusted_sources and provenance_complete"
+                )
             prompt = data.get("prompt")
-            sources = data.get("untrusted_sources", [])
+            sources = data.get("untrusted_sources")
+            if data.get("provenance_complete") is not True:
+                raise SecurityError(
+                    "Caller must attest that all retrieved and embedded external content is represented"
+                )
             if not isinstance(prompt, str) or not prompt:
                 raise SecurityError("prompt must be a non-empty string")
             if not isinstance(sources, list) or len(sources) > 20:
@@ -74,7 +83,9 @@ def create_app(
                 ):
                     raise SecurityError("Untrusted source is empty or too large")
                 normalized.append((item["source"], item["content"]))
-            result = await gateway.propose(prompt, normalized)
+            result = await gateway.propose(
+                prompt, normalized, provenance_complete=True
+            )
             return web.json_response(result)
         except (json.JSONDecodeError, web.HTTPBadRequest):
             raise web.HTTPBadRequest(text="Invalid JSON")
@@ -101,6 +112,10 @@ def create_app(
                 action.digest, data["action_digest"]
             ):
                 raise SecurityError("Approval digest does not match reviewed action")
+            if not gateway.store.is_registered_proposal(action):
+                raise SecurityError("Action was not registered as a model proposal")
+            if gateway.store.action_is_tainted(action):
+                raise SecurityError("Tainted proposals cannot be approved")
             token = gateway.store.create_approval(action, ttl_seconds=120)
             return web.json_response({"approval_token": token, "expires_in_seconds": 120})
         except (json.JSONDecodeError, web.HTTPBadRequest):
