@@ -27,4 +27,4 @@ jobs:
       - name: Compile security gateway
         run: python -m py_compile mesh/security_gateway.py tests/test_security_gateway.py
       - name: Run isolated adversarial and concurrency tests
-        run: python -m pytest tests/test_security_gateway.py -q
+        run: python -m pytest tests/test_security_gateway.py tests/test_security_server.py -q
