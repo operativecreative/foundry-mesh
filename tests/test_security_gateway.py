@@ -223,3 +223,23 @@ def test_taint_is_bound_to_action_and_cannot_be_omitted_at_execution(tmp_path):
             token,
         ))
     assert email.sent == []
+
+
+@pytest.mark.asyncio
+async def test_live_sandbox_smtp_opt_in():
+    import os
+    if os.environ.get("MESH_LIVE_EMAIL_TEST") != "1":
+        pytest.skip("Set MESH_LIVE_EMAIL_TEST=1 to send one explicitly approved sandbox message")
+    recipient = os.environ.get("MESH_EMAIL_TEST_RECIPIENT", "")
+    allowed = {
+        item.strip().lower()
+        for item in os.environ.get("MESH_EMAIL_ALLOWED_RECIPIENTS", "").split(",")
+        if item.strip()
+    }
+    if not recipient or recipient.lower() not in allowed:
+        pytest.skip("MESH_EMAIL_TEST_RECIPIENT must exactly match the sandbox recipient allowlist")
+    await SandboxSMTP().send({
+        "to": recipient,
+        "subject": "Foundry Mesh sandbox verification",
+        "body": "This is an explicitly opted-in security gateway sandbox test.",
+    })
