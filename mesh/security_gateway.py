@@ -105,6 +105,11 @@ class SecurityStore:
                     consumed_at REAL,
                     created_at REAL NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS action_taint (
+                    action_sha256 TEXT NOT NULL,
+                    taint_id TEXT NOT NULL REFERENCES taint_records(taint_id),
+                    PRIMARY KEY(action_sha256, taint_id)
+                );
                 CREATE TABLE IF NOT EXISTS security_audit (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     event TEXT NOT NULL,
@@ -133,6 +138,27 @@ class SecurityStore:
         with self._connect() as db:
             row = db.execute(
                 "SELECT 1 FROM taint_records WHERE taint_id=?", (taint_id,)
+            ).fetchone()
+        return row is not None
+
+    def bind_action_taint(self, action: ProposedAction, taint_ids: Iterable[str]) -> None:
+        with self._connect() as db:
+            for taint_id in set(taint_ids):
+                exists = db.execute(
+                    "SELECT 1 FROM taint_records WHERE taint_id=?", (taint_id,)
+                ).fetchone()
+                if not exists:
+                    raise SecurityError("Cannot bind unknown taint provenance")
+                db.execute(
+                    "INSERT OR IGNORE INTO action_taint(action_sha256, taint_id) VALUES (?, ?)",
+                    (action.digest, taint_id),
+                )
+
+    def action_is_tainted(self, action: ProposedAction) -> bool:
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT 1 FROM action_taint WHERE action_sha256=? LIMIT 1",
+                (action.digest,),
             ).fetchone()
         return row is not None
 
@@ -360,6 +386,7 @@ class SecurityGateway:
         if raw is None:
             return {"status": "no_tool_call", "content": response["content"]}
         action = parse_tool_action(raw)
+        self.store.bind_action_taint(action, taint_ids)
         self.store.audit("action_proposed", action.digest, "model proposed allowlisted action")
         return {
             "status": "approval_required",
@@ -388,6 +415,8 @@ class SecurityGateway:
         if any(not self.store.taint_exists(tid) for tid in ids):
             raise SecurityError("Unknown or forged taint provenance")
         if ids:
+            self.store.bind_action_taint(action, ids)
+        if self.store.action_is_tainted(action):
             self.store.audit("action_blocked_taint", action.digest, "untrusted context cannot trigger email")
             raise SecurityError("Cross-tool exfiltration blocked: action inherits untrusted taint")
         if not self.store.consume_approval(approval_token, action):
