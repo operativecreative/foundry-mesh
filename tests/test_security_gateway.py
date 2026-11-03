@@ -2,7 +2,7 @@ import asyncio
 import json
 import smtplib
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 
 import pytest
 
@@ -243,3 +243,21 @@ async def test_live_sandbox_smtp_opt_in():
         "subject": "Foundry Mesh sandbox verification",
         "body": "This is an explicitly opted-in security gateway sandbox test.",
     })
+
+
+def _consume_approval_in_child(db_path, token, proposed):
+    return SecurityStore(db_path).consume_approval(token, proposed)
+
+
+def test_approval_replay_is_atomic_across_processes(tmp_path):
+    store = make_store(tmp_path)
+    proposed = action()
+    token = store.create_approval(proposed, ttl_seconds=30)
+    with ProcessPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(
+            _consume_approval_in_child,
+            [str(tmp_path / "security.sqlite3")] * 12,
+            [token] * 12,
+            [proposed] * 12,
+        ))
+    assert sum(results) == 1
