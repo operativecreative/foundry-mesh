@@ -288,7 +288,7 @@ class SandboxSMTP:
         recipients = self.env.get("MESH_EMAIL_ALLOWED_RECIPIENTS", "")
         if not all((host, username, password, sender, recipients)):
             raise SecurityError("Sandbox SMTP configuration is incomplete")
-        if "\\r" in sender or "\\n" in sender:
+        if "\r" in sender or "\n" in sender:
             raise SecurityError("Sender header injection rejected")
         try:
             port = int(port_text)
