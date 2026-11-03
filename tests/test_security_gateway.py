@@ -261,3 +261,13 @@ def test_approval_replay_is_atomic_across_processes(tmp_path):
             [proposed] * 12,
         ))
     assert sum(results) == 1
+
+
+def test_action_taint_binding_survives_store_reopen(tmp_path):
+    db_path = tmp_path / "security.sqlite3"
+    store = SecurityStore(db_path)
+    taint_id = store.record_untrusted("document", "untrusted instructions")
+    proposed = action()
+    store.bind_action_taint(proposed, [taint_id])
+    reopened = SecurityStore(db_path)
+    assert reopened.action_is_tainted(proposed) is True
